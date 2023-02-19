@@ -1,0 +1,131 @@
+#include <mega32.h>
+#include <delay.h>
+#include <string.h>
+#include <stdlib.h>
+#include <alcd.h>
+#include <math.h>
+
+int led1;
+long int temparature;
+char temp;
+char  data[20];
+int i=0,c=0,uart_count=0;
+unsigned char temp_ar[3];
+// ADC
+void ADC_Init()
+{
+    DDRA=0xF1;            /* Make ADC port as input */
+    ADCSRA = 0x87;            /* Enable ADC, fr/128  */
+                /* Vref: Avcc, ADC channel: 0 */
+}
+
+
+long int ADC_Read(int channel)
+{
+    long int Ain,AinLow;
+    if(channel==1){
+     ADMUX= 0x41;
+    }
+    if(channel==2){
+     ADMUX=0x42;
+    }
+    if(channel==3){
+     ADMUX=0x43;
+    }
+    ADMUX=ADMUX|(channel & 0x0f);    /* Set input channel to read */
+
+    ADCSRA |= (1<<ADSC);        /* Start conversion */
+    while((ADCSRA&(1<<ADIF))==0);    /* Monitor end of conversion interrupt */
+
+    delay_us(10);
+    AinLow = (int)ADCL;        /* Read lower byte*/
+    Ain = (int)ADCH*256;        /* Read higher 2 bits and
+                    Multiply with weight */
+    Ain = (Ain + AinLow);
+    return(Ain);            /* Return digital value*/
+}
+
+
+ void uart_send(char* sendString){
+     for (i = 0; i < strlen(sendString); i++){ 
+         while (( UCSRA & (1<<UDRE))  == 0){
+      uart_count++;
+      if (uart_count>500){
+      uart_count=0;
+       break;
+      }
+     }
+         UDR = sendString[i];
+        delay_ms(10); 
+     } 
+}
+
+unsigned char uart_receive ()
+ {
+     while(!(UCSRA&(1<<RXC))){
+      uart_count++;  
+      delay_ms(1);
+      if (uart_count>100){
+      uart_count=0;
+      c=5;
+       return '\n';
+      }
+     }
+ // wait until 8-bit of a character is received
+     return UDR;
+ }
+ void uart_receive_data(void){
+ temp=uart_receive();
+    while (temp !='\n')
+    {
+        data[c++]=temp;
+        temp=uart_receive();
+    }
+    data[c]='\0';
+    c=0; 
+    }
+ void cal_temp(void){
+    temparature=ADC_Read(1);
+    temparature= ((temparature/2.046));
+}
+
+void update_esp(){
+    temparature = temparature*10+led1;
+    itoa((int)temparature,temp_ar); 
+    uart_send(temp_ar);
+}
+
+void main() {
+    
+    UBRRH=0x00;
+    UBRRL=0x67; 
+    UCSRB= (1<<RXEN) | (1<<TXEN);
+    UCSRC=(1<<URSEL) | (1<<UCSZ1) | (1<<UCSZ0) ; 
+    ADC_Init();   
+    DDRB=0x01; 
+    
+    while(1){ 
+    
+        uart_receive_data();
+         
+        if(data[0] == '0') {
+            PORTB.0 = 0;
+            led1=0;
+        }
+        else if(data[0] == '1') {
+            PORTB.0 = 1;
+            led1=1;
+        }
+        
+        if(PINB.4==0){
+         PORTB.0=~PORTB.0; 
+         while(PINB.4!=1);
+         data[0]=PINB.0;
+         led1=PINB.0;
+        }
+
+        cal_temp();
+        update_esp();
+        delay_ms(1000);
+    }
+ }

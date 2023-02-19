@@ -1,0 +1,354 @@
+
+#include <string.h>
+#include <mega32.h>
+#include <alcd.h>
+#include <delay.h>
+#include <math.h>
+#include <stdlib.h>
+
+// Few function declaration 
+void correct_pf(void);
+void reinit_display(void);
+
+// Varaible to put data in LCD
+char temp_lcd[5];
+
+// Humidity and temparature variable
+long int humidity,temparature;
+
+// CO2 PPM (Ideal) variable
+long int PPM;
+int prev_ppm;
+float RLOAD=10,PARA=116.6020682,PARB=2.769034,RZERO=76.63;
+
+// PF
+int i=0;
+float temp_pf=0;
+float target_pf=0.95*100;
+int pf_caps_i=0;
+char pf_caps[5]={0x00,0x20,0x30,0x38,0x3C};
+int del_t=0;
+float prev_pf=0;
+
+// Functions for PF
+void cal_pf(void){
+del_t=0;
+for(i=0;i<10;i++){
+ while(PINC.0!=1);
+ TCNT0=0;
+ while(PINC.1!=1);
+  del_t=del_t+TCNT0;
+}
+del_t=del_t/10;
+temp_pf=(cos((del_t*0.000064)*360*50*(3.14/180))*100);
+}
+
+void correct_pf(void){
+cal_pf();
+ PORTC.2=0;
+ PORTC.3=0;
+ PORTC.4=0;
+ PORTC.5=0;
+  while((temp_pf<target_pf && pf_caps_i<4)|| pf_caps_i==-1 ){
+  pf_caps_i++;
+   PORTC |=pf_caps[pf_caps_i];
+   delay_ms(50);
+   cal_pf();
+  }
+  delay_ms(50);
+}
+
+// ADC
+long int ADC_Read(int channel){
+    long int Ain,AinLow; 
+    // ADMUX change upon channel
+    if(channel==0){
+     ADMUX= 0x40;
+    }
+    if(channel==1){
+     ADMUX= 0x41;
+    }
+    if(channel==2){
+     ADMUX=0x42;
+    }
+    if(channel==3){
+     ADMUX=0x43;
+    }
+    ADMUX=ADMUX|(channel & 0x0f);    /* Set channel */
+    ADCSRA |= (1<<ADSC);        /* Start conv */
+    while((ADCSRA&(1<<ADIF))==0);/*End of conv*/
+    delay_us(10);
+    AinLow = (int)ADCL; /* Read lower 8 bit */
+    Ain = (int)ADCH*256; /* Read higher 2 bits */
+    Ain = (Ain + AinLow);
+    return(Ain); /* Return digital value*/
+}
+
+
+// PPM cal
+void cal_ppm(void){
+PPM=ADC_Read(3);
+PPM=PARA*pow(((PPM/204.6)*RLOAD)/RZERO,-PARB);
+if(PPM<600){
+ lcd_gotoxy(5,1);
+ lcd_putsf("E");
+}
+else{
+if(PPM<1000){
+ lcd_gotoxy(5,1);
+ lcd_putsf("G");
+}
+else{
+if(PPM<1500){
+ lcd_gotoxy(5,1);
+ lcd_putsf("M");
+}
+ else{
+ lcd_gotoxy(5,1);
+ lcd_putsf("B");
+ PORTA.0=1;
+ PORTD.1=1;
+ lcd_clear();
+ lcd_gotoxy(1,1);
+ lcd_putsf("AIR QUALITY BAD!!");
+ while(PPM>1000){
+  PPM=PARA*pow(((ADC_Read(3)/204.6)*RLOAD)/RZERO,-PARB);
+ }
+ PORTA.0=0;
+ prev_ppm=0;
+ reinit_display();
+ }
+}
+}
+if(PPM<1000){
+ PORTD.1=0; /* ventilator */
+}
+}
+
+
+// HUMIDITY cal
+void cal_humidity(void){
+ humidity=ADC_Read(2);
+    humidity= ((humidity/204.6)-0.75)/0.031;
+    if(humidity<=30){
+      PORTC.6=1; /* Humidifier */
+    }
+    if(humidity>=50){
+      PORTC.7=1; /* Dehumidifier */
+    }
+}
+
+// PIR and NFC/BLE detector
+void check_pir(void){
+if(PINA.5!=1 && PINA.4==1){
+ //unwanted
+ PORTA.0=1;
+ lcd_clear();
+ lcd_gotoxy(3,1);
+ lcd_putsf("INTRUDER ALERT");
+ while(PINA.5!=1);
+ prev_ppm=0;
+ reinit_display();
+}
+else{
+   PORTA.0=0;    
+}
+}
+
+// Cal temp
+void cal_temp(void){
+ temparature=ADC_Read(1);
+ temparature= ((temparature/2.046));
+}
+
+// Update appliance
+void update_appliance(void){
+ if (PINB.4==0){
+    PORTB.0 = ~PORTB.0;
+    lcd_clear();
+    lcd_gotoxy(2,1);
+    if(PORTB.0==1){
+    lcd_putsf("LOAD-D TURNED ON");
+    }
+    else{
+     lcd_putsf("LOAD-D TURNED OFF");
+    }
+    delay_ms(300);
+    prev_ppm=0;
+    reinit_display();
+    pf_caps_i=-1;
+    correct_pf();
+    }
+    if (PINB.5==0){
+    PORTB.1 = ~PORTB.1;
+    lcd_clear();
+    lcd_gotoxy(2,1);
+    if(PORTB.1==1){
+    lcd_putsf("LOAD-C TURNED ON");
+    }
+    else{
+     lcd_putsf("LOAD-C TURNED OFF");
+    }
+    delay_ms(300);
+    prev_ppm=0;
+    reinit_display();
+    pf_caps_i=-1;
+    correct_pf();
+    }                 
+    if (PINB.6==0){
+    PORTB.2 = ~PORTB.2;
+    lcd_clear();
+    lcd_gotoxy(2,1);
+    if(PORTB.2==1){
+    lcd_putsf("LOAD-B TURNED ON");
+    }
+    else{
+     lcd_putsf("LOAD-B TURNED OFF");
+    }
+    delay_ms(300);
+    prev_ppm=0;
+    reinit_display();
+    pf_caps_i=-1;
+    correct_pf();
+    }                 
+    if (PINB.7==0){
+    PORTB.3 = ~PORTB.3;
+    lcd_clear();
+    lcd_gotoxy(2,1);
+    if(PORTB.3==1){
+    lcd_putsf("LOAD-A TURNED ON");
+    }
+    else{
+     lcd_putsf("LOAD-A TURNED OFF");
+    }
+    delay_ms(300);
+    prev_ppm=0;
+    reinit_display();
+    pf_caps_i=-1;
+    correct_pf();
+    }
+
+}
+
+// check hum dehum needs to be turned off or not
+void check_hum_dehum(void){
+ if(humidity>=40){
+      PORTC.6=0; // Humidifier
+    }
+    if(humidity<=40){
+      PORTC.7=0; // DEHUMIDIFIER
+    }
+}
+
+// Display initial info
+void display_info(void){
+ lcd_clear();
+ lcd_gotoxy(2,0);
+ lcd_putsf("BRAC UNIVERSITY.");
+ lcd_gotoxy(2,1);
+ lcd_putsf("Home Monitoring");
+ lcd_gotoxy(7,2);
+ lcd_putsf("System");
+ lcd_gotoxy(5,3);
+ lcd_putsf("EEE-366_G7");
+ delay_ms(2000);
+}
+
+//Create display sections
+void display_table(void){
+ lcd_clear();
+ lcd_gotoxy(0,0);
+ lcd_putsf("TEMP:  C | HUM:   %");
+ lcd_gotoxy(0,1);
+ lcd_putsf("A.Q:     | A.Q:    "); 
+ lcd_gotoxy(0,2);
+ lcd_putsf("U.PF:    | LOCK:   ");
+ lcd_gotoxy(5,2);
+itoa(temp_pf,temp_lcd); 
+lcd_puts(temp_lcd);
+lcd_gotoxy(3,3);
+lcd_gotoxy(5,3);
+ lcd_putsf("EEE-366_G7");
+}
+
+// update display
+void update_display(void){
+itoa(temparature,temp_lcd);
+lcd_gotoxy(5,0);
+lcd_puts(temp_lcd);
+lcd_gotoxy(16,0);
+itoa(humidity,temp_lcd);
+lcd_puts(temp_lcd);
+ if(prev_ppm!=PPM){
+ lcd_gotoxy(18,1);
+lcd_putsf("  ");
+ lcd_gotoxy(15,1);
+itoa(PPM,temp_lcd);
+lcd_puts(temp_lcd);
+prev_ppm=PPM; 
+ }
+ if(prev_pf!=temp_pf){
+ lcd_gotoxy(7,2);
+ lcd_putsf(" ");
+ lcd_gotoxy(5,2);
+ itoa(temp_pf,temp_lcd);
+ lcd_puts(temp_lcd);
+ prev_pf=temp_pf;     
+ }
+ if(PINA.5==0){
+ lcd_gotoxy(16,2);
+ lcd_putsf("L");
+ }
+ else{
+   lcd_gotoxy(16,2);
+ lcd_putsf("U");
+ }
+}
+
+// Restrore display previous state
+void reinit_display(void){
+ lcd_clear();
+ display_table();
+ update_display();
+}
+
+// Flame check
+void check_flame(void){
+  if(PIND.2==1){
+   PORTA.0=1;
+ lcd_clear();
+ lcd_gotoxy(5,1);
+ lcd_putsf("FIRE HAZARD!!");
+ while(PIND.2!=0);
+ PORTA.0=0;
+ prev_ppm=0;
+ reinit_display();
+  }
+}
+
+// Main code
+void main(void)
+{
+DDRC=0b11111100;
+DDRB=0x0F;
+DDRD=0b11111010;
+DDRA=0xF1;          
+ADCSRA = 0x87;
+TCCR0=(0<<WGM00) | (0<<COM01) | (0<<COM00) | (0<<WGM01) | (1<<CS02) | (0<<CS01) | (1<<CS00);
+lcd_init(20);
+display_info();
+cal_pf();
+display_table();
+
+while (1)
+    {
+    update_appliance();
+    cal_temp();  
+    cal_humidity();
+    cal_ppm();     
+    check_pir();
+    check_hum_dehum();
+    check_flame();
+    update_display();
+    }
+}
